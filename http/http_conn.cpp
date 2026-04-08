@@ -236,18 +236,22 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
             prepare_error(401, "Unauthorized");
             return true;
         }
-        const std::string auth_mode = JsonUtils::get(json, "auth_mode");
-        if (auth_mode == "session") {
-            const std::string sid = AuthManager::instance().issue_session(username);
-            char resp[512];
-            snprintf(resp, sizeof(resp), "{\"ok\":true,\"auth\":\"session\",\"sid\":\"%s\"}", sid.c_str());
-            prepare_json(200, resp);
-            return true;
-        }
-        const std::string token = AuthManager::instance().issue_jwt(username);
-        char resp[512];
-        snprintf(resp, sizeof(resp), "{\"ok\":true,\"auth\":\"jwt\",\"token\":\"%s\"}", token.c_str());
-        prepare_json(200, resp);
+        // Always use cookie-based session; ignore JWT mode.
+        const int ttl_seconds = 3600;  // 1 hour
+        const std::string sid = AuthManager::instance().issue_session(username, ttl_seconds);
+
+        write_idx_ = 0;
+        add_response("HTTP/1.1 200 OK\r\n");
+        add_response("Set-Cookie: sid=%s; HttpOnly; Max-Age=%d; Path=/\r\n", sid.c_str(), ttl_seconds);
+        add_response("Content-Type: application/json; charset=utf-8\r\n");
+        const char* body = "{\"ok\":true,\"auth\":\"session\"}";
+        add_response("Content-Length: %zu\r\n", strlen(body));
+        add_response("Connection: close\r\n\r\n");
+        add_response("%s", body);
+
+        iov_[0].iov_base = write_buf_;
+        iov_[0].iov_len = static_cast<size_t>(write_idx_);
+        iov_cnt_ = 1;
         return true;
     }
 
@@ -349,10 +353,6 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
 }
 
 bool HttpConn::current_user_from_request(const HttpRequest& req, std::string& user) {
-    const std::string auth = HttpParser::get_header(req, "Authorization");
-    if (auth.rfind("Bearer ", 0) == 0) {
-        return AuthManager::instance().verify_jwt(auth.substr(7), user);
-    }
     const std::string cookie = HttpParser::get_header(req, "Cookie");
     const std::string key = "sid=";
     size_t pos = cookie.find(key);

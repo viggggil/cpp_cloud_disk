@@ -11,17 +11,20 @@ public:
 
     bool register_user(const std::string& username, const std::string& password);
     bool verify_user(const std::string& username, const std::string& password);
-    std::string issue_jwt(const std::string& username);
-    std::string issue_session(const std::string& username);
-    bool verify_jwt(const std::string& token, std::string& username_out);
+    // Issue a new session id that is valid for ttl_seconds from now.
+    std::string issue_session(const std::string& username, int ttl_seconds);
     bool verify_session(const std::string& sid, std::string& username_out);
 
 private:
     AuthManager() = default;
     std::string random_token(const std::string& prefix, const std::string& username);
 
-    std::unordered_map<std::string, std::string> jwt_to_user_;
-    std::unordered_map<std::string, std::string> session_to_user_;
+    struct SessionInfo {
+        std::string username;
+        std::int64_t expires_at = 0;  // epoch seconds
+    };
+
+    std::unordered_map<std::string, SessionInfo> session_to_user_;
     std::unordered_map<std::string, std::string> users_;
     std::mutex mu_;
 };

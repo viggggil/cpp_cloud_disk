@@ -40,28 +40,14 @@ std::string AuthManager::random_token(const std::string& prefix, const std::stri
     return oss.str();
 }
 
-std::string AuthManager::issue_jwt(const std::string& username) {
-    std::lock_guard<std::mutex> lock(mu_);
-    const std::string token = random_token("jwt", username);
-    jwt_to_user_[token] = username;
-    return token;
-}
-
-std::string AuthManager::issue_session(const std::string& username) {
+std::string AuthManager::issue_session(const std::string& username, int ttl_seconds) {
     std::lock_guard<std::mutex> lock(mu_);
     const std::string sid = random_token("sid", username);
-    session_to_user_[sid] = username;
+    SessionInfo info;
+    info.username = username;
+    info.expires_at = static_cast<std::int64_t>(std::time(nullptr)) + ttl_seconds;
+    session_to_user_[sid] = info;
     return sid;
-}
-
-bool AuthManager::verify_jwt(const std::string& token, std::string& username_out) {
-    std::lock_guard<std::mutex> lock(mu_);
-    auto it = jwt_to_user_.find(token);
-    if (it == jwt_to_user_.end()) {
-        return false;
-    }
-    username_out = it->second;
-    return true;
 }
 
 bool AuthManager::verify_session(const std::string& sid, std::string& username_out) {
@@ -70,6 +56,12 @@ bool AuthManager::verify_session(const std::string& sid, std::string& username_o
     if (it == session_to_user_.end()) {
         return false;
     }
-    username_out = it->second;
+    const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
+    if (it->second.expires_at > 0 && it->second.expires_at < now) {
+        // Expired; erase and fail.
+        session_to_user_.erase(it);
+        return false;
+    }
+    username_out = it->second.username;
     return true;
 }

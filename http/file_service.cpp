@@ -12,6 +12,16 @@ namespace fs = std::filesystem;
 namespace {
 const char* kStorageRoot = "./root/storage";
 
+// Very small whitelist of allowed file extensions.
+// You can extend this as needed.
+bool allow_extension(const std::string& path) {
+    auto pos = path.find_last_of('.');
+    if (pos == std::string::npos || pos == path.size() - 1) return false;
+    std::string ext = path.substr(pos + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == "txt" || ext == "md" || ext == "pdf" || ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "zip";
+}
+
 std::string escape_json(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -46,6 +56,11 @@ bool FileService::upload_text_file(const std::string& user, const std::string& r
     std::string full_path;
     if (!safe_user_path(user, rel_path, full_path)) {
         err = "invalid path";
+        return false;
+    }
+
+    if (!allow_extension(rel_path)) {
+        err = "unsupported file type";
         return false;
     }
 

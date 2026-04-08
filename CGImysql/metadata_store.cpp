@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <ctime>
+#include <cstring>
 
 #include "sql_connection_pool.h"
 

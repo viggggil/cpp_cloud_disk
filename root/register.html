@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>登录 - 个人云盘</title>
+    <title>注册 - 个人云盘</title>
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: 40px; background: #f5f5f5; }
       .card { max-width: 360px; margin: 40px auto; padding: 24px 28px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
@@ -11,7 +11,7 @@
       label { display: block; margin: 12px 0 4px; font-size: 14px; }
       input[type="text"], input[type="password"] { width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
       button { margin-top: 16px; width: 100%; padding: 9px 0; font-size: 14px; border-radius: 4px; border: none; cursor: pointer; }
-      .primary { background: #1677ff; color: #fff; }
+      .primary { background: #52c41a; color: #fff; }
       .secondary { background: #f0f0f0; color: #333; margin-top: 8px; }
       .error { margin-top: 8px; color: #c00; font-size: 13px; }
       .success { margin-top: 8px; color: #090; font-size: 13px; }
@@ -19,52 +19,61 @@
   </head>
   <body>
     <div class="card">
-      <h1>个人云盘登录</h1>
+      <h1>注册新账号</h1>
       <label for="username">用户名</label>
       <input id="username" type="text" autocomplete="username" />
 
       <label for="password">密码</label>
-      <input id="password" type="password" autocomplete="current-password" />
+      <input id="password" type="password" autocomplete="new-password" />
 
-      <button class="primary" onclick="login()">登录</button>
-      <button class="secondary" onclick="location.href='register.html'">注册新账号</button>
+      <label for="password2">确认密码</label>
+      <input id="password2" type="password" autocomplete="new-password" />
+
+      <button class="primary" onclick="registerUser()">注册</button>
+      <button class="secondary" onclick="location.href='index.html'">返回登录</button>
 
       <div id="msg" class="error" style="display:none"></div>
     </div>
 
     <script>
-      async function login() {
+      async function registerUser() {
         const u = document.getElementById('username').value.trim();
-        const p = document.getElementById('password').value;
+        const p1 = document.getElementById('password').value;
+        const p2 = document.getElementById('password2').value;
         const msg = document.getElementById('msg');
         msg.style.display = 'none';
         msg.className = 'error';
 
-        if (!u || !p) {
-          msg.textContent = '请输入用户名和密码';
+        if (!u || !p1 || !p2) {
+          msg.textContent = '请填写完整信息';
+          msg.style.display = 'block';
+          return;
+        }
+        if (p1 !== p2) {
+          msg.textContent = '两次输入的密码不一致';
           msg.style.display = 'block';
           return;
         }
 
         try {
-          const resp = await fetch('/api/auth/login', {
+          const resp = await fetch('/api/auth/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: u, password: p })
+            body: JSON.stringify({ username: u, password: p1 })
           });
           if (!resp.ok) {
-            msg.textContent = '登录失败，用户名或密码错误';
+            if (resp.status === 409) {
+              msg.textContent = '用户名已存在';
+            } else {
+              msg.textContent = '注册失败';
+            }
             msg.style.display = 'block';
             return;
           }
-          const data = await resp.json();
-          if (data.ok) {
-            // sid 已经通过 Set-Cookie 下发
-            window.location.href = '/home.html';
-          } else {
-            msg.textContent = '登录失败';
-            msg.style.display = 'block';
-          }
+          msg.className = 'success';
+          msg.textContent = '注册成功，正在跳转到登录页...';
+          msg.style.display = 'block';
+          setTimeout(() => { window.location.href = '/index.html'; }, 1000);
         } catch (e) {
           msg.textContent = '网络错误，请稍后重试';
           msg.style.display = 'block';
@@ -72,5 +81,5 @@
       }
     </script>
   </body>
+  
 </html>
-

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>我的云盘</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: 24px; background: #f5f5f5; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+      .card { background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+      h1 { font-size: 20px; margin: 0; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+      th, td { padding: 6px 4px; font-size: 13px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+      th { background: #fafafa; }
+      input[type="text"] { width: 100%; padding: 6px 8px; font-size: 13px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
+      textarea { width: 100%; height: 80px; padding: 6px 8px; font-size: 13px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
+      button { padding: 6px 10px; font-size: 13px; border-radius: 4px; border: none; cursor: pointer; }
+      .primary { background: #1677ff; color: #fff; }
+      .danger { background: #ff4d4f; color: #fff; }
+      .link { background: transparent; color: #1677ff; border: none; padding: 0; }
+      .msg { margin-top: 8px; font-size: 13px; }
+      .msg.error { color: #c00; }
+      .msg.success { color: #090; }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div><strong id="welcome">我的云盘</strong></div>
+      <div>
+        <button class="link" onclick="location.href='/index.html'">退出登录</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <div style="flex:2;">
+          <div style="font-size:13px; margin-bottom:4px;">文件路径（如：note.txt 或 folder/note.txt）</div>
+          <input id="uploadPath" type="text" />
+        </div>
+        <div style="flex:3;">
+          <div style="font-size:13px; margin-bottom:4px;">文本内容</div>
+          <textarea id="uploadContent"></textarea>
+        </div>
+        <div style="flex:0; align-self:center;">
+          <button class="primary" onclick="uploadFile()">上传/保存</button>
+        </div>
+      </div>
+      <div id="uploadMsg" class="msg" style="display:none;"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-size:14px;">我的文件</div>
+        <button class="primary" onclick="loadFiles()">刷新列表</button>
+      </div>
+      <table id="fileTable">
+        <thead>
+          <tr><th>路径</th><th>大小 (字节)</th><th>更新时间</th><th>操作</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="listMsg" class="msg" style="display:none;"></div>
+    </div>
+
+    <script>
+      async function init() {
+        try {
+          const resp = await fetch('/api/me');
+          if (!resp.ok) {
+            window.location.href = '/index.html';
+            return;
+          }
+          const data = await resp.json();
+          if (data.ok) {
+            document.getElementById('welcome').textContent = '我的云盘 - ' + data.username;
+          }
+        } catch (e) {
+          // ignore
+        }
+        loadFiles();
+      }
+
+      async function uploadFile() {
+        const path = document.getElementById('uploadPath').value.trim();
+        const content = document.getElementById('uploadContent').value;
+        const msg = document.getElementById('uploadMsg');
+        msg.style.display = 'none';
+        msg.className = 'msg';
+
+        if (!path) {
+          msg.textContent = '请填写文件路径';
+          msg.className = 'msg error';
+          msg.style.display = 'block';
+          return;
+        }
+
+        try {
+          const resp = await fetch('/api/files/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, content })
+          });
+          if (!resp.ok) {
+            const text = await resp.text();
+            msg.textContent = '上传失败: ' + text;
+            msg.className = 'msg error';
+            msg.style.display = 'block';
+            return;
+          }
+          msg.textContent = '保存成功';
+          msg.className = 'msg success';
+          msg.style.display = 'block';
+          loadFiles();
+        } catch (e) {
+          msg.textContent = '网络错误';
+          msg.className = 'msg error';
+          msg.style.display = 'block';
+        }
+      }
+
+      async function loadFiles() {
+        const msg = document.getElementById('listMsg');
+        msg.style.display = 'none';
+        const tbody = document.querySelector('#fileTable tbody');
+        tbody.innerHTML = '';
+        try {
+          const resp = await fetch('/api/files/list', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dir: '', page: 1, page_size: 100 })
+          });
+          if (!resp.ok) {
+            msg.textContent = '加载文件列表失败';
+            msg.className = 'msg error';
+            msg.style.display = 'block';
+            return;
+          }
+          const data = await resp.json();
+          if (!data.ok) {
+            msg.textContent = '加载文件列表失败';
+            msg.className = 'msg error';
+            msg.style.display = 'block';
+            return;
+          }
+          (data.items || []).forEach(item => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + item.path + '</td>' +
+                           '<td>' + item.size + '</td>' +
+                           '<td>' + (item.updated_at || '') + '</td>' +
+                           '<td>' +
+                           '<button class="link" onclick="downloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">查看</button> ' +
+                           '<button class="danger" onclick="deleteFile(\'' + item.path.replace(/'/g, "\\'") + '\')">删除</button>' +
+                           '</td>';
+            tbody.appendChild(tr);
+          });
+        } catch (e) {
+          msg.textContent = '网络错误';
+          msg.className = 'msg error';
+          msg.style.display = 'block';
+        }
+      }
+
+      async function deleteFile(path) {
+        if (!confirm('确定删除 ' + path + ' ?')) return;
+        try {
+          const resp = await fetch('/api/files/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+          });
+          if (resp.ok) {
+            loadFiles();
+          } else {
+            alert('删除失败');
+          }
+        } catch (e) {
+          alert('网络错误');
+        }
+      }
+
+      async function downloadFile(path) {
+        try {
+          const resp = await fetch('/api/files/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+          });
+          if (!resp.ok) {
+            alert('读取文件失败');
+            return;
+          }
+          const data = await resp.json();
+          if (!data.ok) {
+            alert('读取文件失败');
+            return;
+          }
+          document.getElementById('uploadPath').value = data.path;
+          document.getElementById('uploadContent').value = data.content;
+        } catch (e) {
+          alert('网络错误');
+        }
+      }
+
+      init();
+    </script>
+  </body>
+  
+</html>
