@@ -1,0 +1,48 @@
+# Build
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+Makefile
+
+# Binary / output
+*.o
+*.out
+*.a
+*.so
+*.exe
+server
+main
+
+# Debug / logs
+*.log
+logs/
+core
+core.*
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+config/local.yaml
+config/local.json
+
+# Upload storage (你的云盘测试文件目录)
+storage/
+uploads/
+tmp_uploads/
+
+# Database / test data
+*.db
+*.sqlite
