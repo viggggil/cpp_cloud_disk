@@ -48,6 +48,20 @@ bool FileService::upload_text_file(const std::string& user, const std::string& r
         err = "invalid path";
         return false;
     }
+
+    const std::uint64_t size = static_cast<std::uint64_t>(content.size());
+    if (size > kMaxFileBytes) {
+        err = "file too large (max 20MB)";
+        return false;
+    }
+
+    // Pre-check user quota based on current metadata.
+    const std::uint64_t used = MetadataStore::instance().user_used_bytes(user);
+    if (used + size > kUserQuotaBytes) {
+        err = "user quota exceeded (200MB)";
+        return false;
+    }
+
     fs::create_directories(fs::path(full_path).parent_path());
     std::ofstream ofs(full_path, std::ios::binary | std::ios::trunc);
     if (!ofs.is_open()) {
@@ -62,8 +76,11 @@ bool FileService::upload_text_file(const std::string& user, const std::string& r
     FileMeta meta;
     meta.owner = user;
     meta.path = rel_path;
-    meta.size = static_cast<std::uint64_t>(content.size());
-    MetadataStore::instance().upsert_file_meta(meta);
+    meta.size = size;
+    if (!MetadataStore::instance().upsert_file_meta(meta)) {
+        err = "metadata persist failed or quota exceeded";
+        return false;
+    }
     return true;
 }
 

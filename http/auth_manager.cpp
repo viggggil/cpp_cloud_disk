@@ -15,6 +15,7 @@ bool AuthManager::register_user(const std::string& username, const std::string& 
         return false;
     }
     // TODO: replace plain password with salted hash before persistent storage.
+    // For now we store the raw password string as a "hash" for demo purposes.
     const bool ok = MetadataStore::instance().register_user(username, password);
     if (!ok) {
         return false;

@@ -67,10 +67,11 @@ void WebServer::log_write() {
 }
 
 void WebServer::sql_pool() {
+    // Initialize MySQL connection pool and DB schema.
     (void)sql_num_;
-    // Initializes DB schema entry points; current implementation is an in-process store
-    // with MySQL-compatible repository interfaces for easy swap later.
-    MetadataStore::instance().init_schema();
+    if (!MetadataStore::instance().init_schema()) {
+        std::fprintf(stderr, "[db] init_schema failed. Check MySQL settings in sql_connection_pool.cpp and ensure database exists.\n");
+    }
 }
 
 void WebServer::thread_pool() {
