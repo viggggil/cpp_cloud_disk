@@ -13,13 +13,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace {
-
-constexpr int MAX_FD = 65536;
-constexpr int MAX_EVENT_NUMBER = 10000;
-
-}  // namespace
-
 WebServer::WebServer()
     : port_(9006),
       trig_mode_(0),
@@ -32,7 +25,9 @@ WebServer::WebServer()
       listenfd_(-1),
       epollfd_(-1),
       pool_(nullptr),
-      users_(nullptr) {}
+      users_(nullptr),
+      timer_list_(),
+      conn_timers_{} {}
 
 WebServer::~WebServer() {
     delete pool_;
@@ -106,6 +101,10 @@ void WebServer::trig_mode() {
 
 void WebServer::event_listen() {
     users_ = new HttpConn[MAX_FD];
+    // 初始化所有定时器指针为空
+    for (int i = 0; i < MAX_FD; ++i) {
+        conn_timers_[i] = nullptr;
+    }
 
     listenfd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd_ < 0) {
@@ -165,7 +164,24 @@ void WebServer::deal_listen() {
         HttpConn::set_nonblocking(connfd);
         HttpConn::add_fd(connfd, epollfd_, true, false);
         users_[connfd].init(connfd, addr);
+
+        // 为新连接分配一个定时器，例如 60 秒未活跃则关闭
+        conn_timers_[connfd] = timer_list_.add_timer(60000, [this, connfd]() {
+            this->close_conn(connfd, true);
+        });
     }
+}
+
+void WebServer::close_conn(int sockfd, bool from_timer) {
+    if (sockfd < 0 || sockfd >= MAX_FD) return;
+
+    // 删除和该连接关联的定时器
+    if (!from_timer && conn_timers_[sockfd]) {
+        timer_list_.del_timer(conn_timers_[sockfd]);
+        conn_timers_[sockfd] = nullptr;
+    }
+
+    users_[sockfd].close_conn();
 }
 
 void WebServer::deal_read(int sockfd) {
@@ -173,15 +189,24 @@ void WebServer::deal_read(int sockfd) {
         return;
     }
     if (!users_[sockfd].read_once()) {
-        users_[sockfd].close_conn();
+        close_conn(sockfd, false);
         return;
     }
     if (!users_[sockfd].has_complete_request()) {
         HttpConn::mod_fd(sockfd, epollfd_, EPOLLIN);
+        // 刷新定时器：只要有读事件，就认为连接是活跃的
+        if (conn_timers_[sockfd]) {
+            timer_list_.adjust_timer(conn_timers_[sockfd], 60000);
+        }
         return;
     }
     if (!pool_->append(&users_[sockfd])) {
-        users_[sockfd].close_conn();
+        close_conn(sockfd, false);
+        return;
+    }
+    // 收到完整请求也视作活跃，刷新定时器
+    if (conn_timers_[sockfd]) {
+        timer_list_.adjust_timer(conn_timers_[sockfd], 60000);
     }
 }
 
@@ -190,14 +215,20 @@ void WebServer::deal_write(int sockfd) {
         return;
     }
     if (!users_[sockfd].write()) {
-        users_[sockfd].close_conn();
+        close_conn(sockfd, false);
+        return;
+    }
+    // 有发送活动同样刷新定时器
+    if (conn_timers_[sockfd]) {
+        timer_list_.adjust_timer(conn_timers_[sockfd], 60000);
     }
 }
 
 void WebServer::event_loop() {
     epoll_event events[MAX_EVENT_NUMBER];
     while (true) {
-        int num = epoll_wait(epollfd_, events, MAX_EVENT_NUMBER, -1);
+        // 这里给 epoll_wait 一个有限超时时间（例如 1000ms），便于定期 tick 定时器。
+        int num = epoll_wait(epollfd_, events, MAX_EVENT_NUMBER, 1000);
         if (num < 0) {
             if (errno == EINTR) {
                 continue;
@@ -209,12 +240,15 @@ void WebServer::event_loop() {
             if (sockfd == listenfd_) {
                 deal_listen();
             } else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
-                users_[sockfd].close_conn();
+                close_conn(sockfd, false);
             } else if (events[i].events & EPOLLIN) {
                 deal_read(sockfd);
             } else if (events[i].events & EPOLLOUT) {
                 deal_write(sockfd);
             }
         }
+
+        // 处理超时连接
+        timer_list_.tick();
     }
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <ctime>
 #include <cstring>
+#include <cstdio>
 
 #include "sql_connection_pool.h"
 
@@ -28,20 +29,24 @@ bool MetadataStore::init_schema() {
         "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP" ")";
 
     if (mysql_query(raw, user_sql) != 0) {
+        std::fprintf(stderr, "[db] create users failed: %s\n", mysql_error(raw));
         return false;
     }
 
+    // NOTE: path 长度改成 255，避免在 utf8mb4 下联合唯一索引(owner, path)
+    // 超过 InnoDB 3072 字节索引限制。
     const char* file_sql =
         "CREATE TABLE IF NOT EXISTS file_meta("
         "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
         "owner VARCHAR(64) NOT NULL,"
-        "path VARCHAR(1024) NOT NULL,"
+        "path VARCHAR(255) NOT NULL,"
         "size BIGINT NOT NULL,"
         "updated_at BIGINT NOT NULL,"
         "UNIQUE KEY uniq_owner_path(owner, path),"
         "INDEX idx_owner(owner)" ")";
 
     if (mysql_query(raw, file_sql) != 0) {
+        std::fprintf(stderr, "[db] create file_meta failed: %s\n", mysql_error(raw));
         return false;
     }
 

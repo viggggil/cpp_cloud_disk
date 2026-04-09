@@ -3,9 +3,13 @@
 
 #include "http/http_conn.h"
 #include "threadpool/threadpool.h"
+#include "timer/lst_timer.h"
 
 class WebServer {
 public:
+    static constexpr int MAX_FD = 65536;
+    static constexpr int MAX_EVENT_NUMBER = 10000;
+
     WebServer();
     ~WebServer();
 
@@ -18,6 +22,8 @@ public:
     void event_loop();
 
 private:
+    void close_conn(int sockfd, bool from_timer);
+
     void deal_listen();
     void deal_read(int sockfd);
     void deal_write(int sockfd);
@@ -37,6 +43,9 @@ private:
 
     ThreadPool<HttpConn>* pool_;
     HttpConn* users_;
+
+    TimerList timer_list_;
+    UtilTimer* conn_timers_[MAX_FD];
 };
 
 #endif
