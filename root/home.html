@@ -12,15 +12,17 @@
       table { width: 100%; border-collapse: collapse; margin-top: 12px; }
       th, td { padding: 6px 4px; font-size: 13px; text-align: left; border-bottom: 1px solid #f0f0f0; }
       th { background: #fafafa; }
-      input[type="text"] { width: 100%; padding: 6px 8px; font-size: 13px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
+      input[type="text"], input[type="file"] { width: 100%; padding: 6px 8px; font-size: 13px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
       textarea { width: 100%; height: 80px; padding: 6px 8px; font-size: 13px; box-sizing: border-box; border-radius: 4px; border: 1px solid #ccc; }
       button { padding: 6px 10px; font-size: 13px; border-radius: 4px; border: none; cursor: pointer; }
       .primary { background: #1677ff; color: #fff; }
+      .secondary { background: #52c41a; color: #fff; }
       .danger { background: #ff4d4f; color: #fff; }
       .link { background: transparent; color: #1677ff; border: none; padding: 0; }
       .msg { margin-top: 8px; font-size: 13px; }
       .msg.error { color: #c00; }
       .msg.success { color: #090; }
+      .muted { color: #666; font-size: 12px; }
     </style>
   </head>
   <body>
@@ -48,6 +50,25 @@
       <div id="uploadMsg" class="msg" style="display:none;"></div>
     </div>
 
+    <div class="card" style="margin-bottom:16px;">
+      <div style="font-size:14px; margin-bottom:10px;">上传本地文件</div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+        <div style="flex:2; min-width:220px;">
+          <div style="font-size:13px; margin-bottom:4px;">本地文件</div>
+          <input id="localFile" type="file" accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.gif,.zip" />
+        </div>
+        <div style="flex:2; min-width:220px;">
+          <div style="font-size:13px; margin-bottom:4px;">保存路径（可选，默认用文件名）</div>
+          <input id="localFilePath" type="text" placeholder="例如 docs/report.pdf" />
+        </div>
+        <div>
+          <button class="secondary" onclick="uploadLocalFile()">上传本地文件</button>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:8px;">支持格式：txt / md / pdf / png / jpg / jpeg / gif / zip，单文件最大 20MB，用户总配额 200MB。</div>
+      <div id="localUploadMsg" class="msg" style="display:none;"></div>
+    </div>
+
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div style="font-size:14px;">我的文件</div>
@@ -55,7 +76,7 @@
       </div>
       <table id="fileTable">
         <thead>
-          <tr><th>路径</th><th>大小 (字节)</th><th>更新时间</th><th>操作</th></tr>
+          <tr><th>文件名</th><th>路径</th><th>大小 (字节)</th><th>更新时间</th><th>类型</th><th>操作</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -144,11 +165,17 @@
           }
           (data.items || []).forEach(item => {
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td>' + item.path + '</td>' +
+            const previewBtn = item.previewable
+              ? '<button class="link" onclick="downloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">查看</button> '
+              : '';
+            const downloadBtn = '<button class="link" onclick="rawDownloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">下载</button> ';
+            tr.innerHTML = '<td>' + (item.name || '') + '</td>' +
+                           '<td>' + item.path + '</td>' +
                            '<td>' + item.size + '</td>' +
-                           '<td>' + (item.updated_at || '') + '</td>' +
+                           '<td>' + formatTimestamp(item.updated_at) + '</td>' +
+                           '<td>' + (item.content_type || '') + '</td>' +
                            '<td>' +
-                           '<button class="link" onclick="downloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">查看</button> ' +
+                           previewBtn + downloadBtn +
                            '<button class="danger" onclick="deleteFile(\'' + item.path.replace(/'/g, "\\'") + '\')">删除</button>' +
                            '</td>';
             tbody.appendChild(tr);
@@ -199,6 +226,62 @@
         } catch (e) {
           alert('网络错误');
         }
+      }
+
+      async function uploadLocalFile() {
+        const input = document.getElementById('localFile');
+        const customPath = document.getElementById('localFilePath').value.trim();
+        const msg = document.getElementById('localUploadMsg');
+        msg.style.display = 'none';
+        msg.className = 'msg';
+
+        if (!input.files || input.files.length === 0) {
+          msg.textContent = '请选择一个本地文件';
+          msg.className = 'msg error';
+          msg.style.display = 'block';
+          return;
+        }
+
+        const file = input.files[0];
+        const path = customPath || file.name;
+        const form = new FormData();
+        form.append('path', path);
+        form.append('file', file, file.name);
+
+        try {
+          const resp = await fetch('/api/files/upload-local', {
+            method: 'POST',
+            body: form
+          });
+          if (!resp.ok) {
+            const text = await resp.text();
+            msg.textContent = '上传失败: ' + text;
+            msg.className = 'msg error';
+            msg.style.display = 'block';
+            return;
+          }
+          msg.textContent = '本地文件上传成功';
+          msg.className = 'msg success';
+          msg.style.display = 'block';
+          input.value = '';
+          document.getElementById('localFilePath').value = '';
+          loadFiles();
+        } catch (e) {
+          msg.textContent = '网络错误';
+          msg.className = 'msg error';
+          msg.style.display = 'block';
+        }
+      }
+
+      function rawDownloadFile(path) {
+        window.location.href = '/api/files/raw-download?path=' + encodeURIComponent(path);
+      }
+
+      function formatTimestamp(ts) {
+        if (!ts) return '';
+        const d = new Date(Number(ts) * 1000);
+        if (Number.isNaN(d.getTime())) return String(ts);
+        return d.toLocaleString();
       }
 
       init();

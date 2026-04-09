@@ -59,6 +59,9 @@ private:
 
     bool add_response(const char* format, ...);
     bool add_file(const char* path);
+    bool add_mapped_file_response(const char* path,
+                                  const char* content_type,
+                                  const char* disposition = nullptr);
     void unmap_file();
     void* file_addr_ = nullptr;
     long file_size_ = 0;
@@ -71,6 +74,12 @@ private:
     bool parse_request();
     void prepare_error(int code, const char* msg);
     void prepare_json(int code, const char* body);
+    void prepare_binary(int code,
+                        const char* status,
+                        const char* content_type,
+                        const char* body,
+                        size_t body_len,
+                        const char* disposition = nullptr);
     bool current_user_from_request(const HttpRequest& req, std::string& user);
     bool handle_api_request(const HttpRequest& req);
 };
