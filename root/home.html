@@ -33,6 +33,27 @@
       .preview-box { border: 1px solid #eee; background: #fafafa; padding: 12px; border-radius: 6px; }
       .preview-box pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 13px; }
       .preview-box img { max-width: 100%; max-height: 480px; display: block; margin: 0 auto; }
+      .name-link { color: #1677ff; cursor: pointer; }
+      .name-link:hover { text-decoration: underline; }
+      .context-menu {
+        position: fixed;
+        z-index: 9999;
+        min-width: 140px;
+        background: #fff;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        padding: 6px 0;
+      }
+      .context-menu button {
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        color: #333;
+        border-radius: 0;
+        padding: 8px 12px;
+      }
+      .context-menu button:hover { background: #f5f5f5; }
     </style>
   </head>
   <body>
@@ -75,7 +96,7 @@
 
           <table id="fileTable">
             <thead>
-              <tr><th>名称</th><th>路径</th><th>大小</th><th>更新时间</th><th>类型</th><th>操作</th></tr>
+              <tr><th>名称</th><th>路径</th><th>大小</th><th>更新时间</th><th>类型</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -83,7 +104,7 @@
 
           <div class="preview-panel">
             <div style="font-size:14px; margin-bottom:8px;">在线预览</div>
-            <div id="previewEmpty" class="muted">选择“查看”可在线预览 txt / md / png / jpg / jpeg / gif。</div>
+            <div id="previewEmpty" class="muted">点击文件名可直接打开目录或预览 txt / md / png / jpg / jpeg / gif，其他文件默认下载。</div>
             <div id="previewText" class="preview-box" style="display:none;"><pre id="previewTextContent"></pre></div>
             <div id="previewImage" class="preview-box" style="display:none;"><img id="previewImageContent" alt="图片预览" /></div>
           </div>
@@ -91,9 +112,18 @@
       </div>
     </div>
 
+    <div id="contextMenu" class="context-menu" style="display:none;">
+      <button id="contextOpenBtn" type="button">打开</button>
+      <button id="contextDownloadBtn" type="button">下载</button>
+      <button id="contextRenameBtn" type="button">重命名</button>
+      <button id="contextMoveBtn" type="button">移动</button>
+      <button id="contextDeleteBtn" type="button">删除</button>
+    </div>
+
     <script>
       let currentDir = '';
       let directoryItems = [];
+      let contextTarget = null;
 
       async function init() {
         try {
@@ -169,46 +199,65 @@
 
       function buildRow(item) {
         const tr = document.createElement('tr');
-        [item.is_dir ? ('📁 ' + (item.name || '')) : (item.name || ''), item.path || '', item.is_dir ? '-' : String(item.size || 0), formatTimestamp(item.updated_at), item.content_type || ''].forEach(text => {
+        const nameTd = document.createElement('td');
+        const nameLink = document.createElement('span');
+        nameLink.className = 'name-link';
+        nameLink.textContent = item.is_dir ? ('📁 ' + (item.name || '')) : (item.name || '');
+        nameLink.addEventListener('click', () => openEntry(item));
+        nameTd.appendChild(nameLink);
+        tr.appendChild(nameTd);
+
+        [item.path || '', item.is_dir ? '-' : String(item.size || 0), formatTimestamp(item.updated_at), item.content_type || ''].forEach(text => {
           const td = document.createElement('td');
           td.textContent = text;
           tr.appendChild(td);
         });
 
-        const actionTd = document.createElement('td');
-        if (item.is_dir) {
-          actionTd.appendChild(linkButton('打开', () => loadFiles(item.path || '')));
-          actionTd.appendChild(document.createTextNode(' '));
-          actionTd.appendChild(linkButton('重命名', () => renameEntry(item.path || '', item.name || '')));
-          actionTd.appendChild(document.createTextNode(' '));
-          actionTd.appendChild(linkButton('移动', () => moveEntry(item.path || '')));
-        } else {
-          if (item.previewable) {
-            actionTd.appendChild(linkButton('查看', () => previewFile(item.path || '', item.preview_kind || '')));
-            actionTd.appendChild(document.createTextNode(' '));
-          }
-          actionTd.appendChild(linkButton('下载', () => rawDownloadFile(item.path || '')));
-          actionTd.appendChild(document.createTextNode(' '));
-          actionTd.appendChild(linkButton('重命名', () => renameEntry(item.path || '', item.name || '')));
-          actionTd.appendChild(document.createTextNode(' '));
-          actionTd.appendChild(linkButton('移动', () => moveEntry(item.path || '')));
-          actionTd.appendChild(document.createTextNode(' '));
-          const del = document.createElement('button');
-          del.className = 'danger';
-          del.textContent = '删除';
-          del.addEventListener('click', () => deleteFile(item.path || ''));
-          actionTd.appendChild(del);
-        }
-        tr.appendChild(actionTd);
+        tr.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          showContextMenu(e, item);
+        });
         return tr;
       }
 
-      function linkButton(text, onClick) {
-        const btn = document.createElement('button');
-        btn.className = 'link';
-        btn.textContent = text;
-        btn.addEventListener('click', onClick);
-        return btn;
+      function openEntry(item) {
+        if (!item) return;
+        if (item.is_dir) {
+          loadFiles(item.path || '');
+          return;
+        }
+        if (item.previewable && (item.preview_kind === 'text' || item.preview_kind === 'image')) {
+          previewFile(item.path || '', item.preview_kind || '');
+          return;
+        }
+        rawDownloadFile(item.path || '');
+      }
+
+      function showContextMenu(event, item) {
+        contextTarget = item;
+        const menu = document.getElementById('contextMenu');
+        const openBtn = document.getElementById('contextOpenBtn');
+        const downloadBtn = document.getElementById('contextDownloadBtn');
+        openBtn.textContent = item.is_dir ? '打开' : ((item.previewable && (item.preview_kind === 'text' || item.preview_kind === 'image')) ? '预览' : '打开');
+        downloadBtn.style.display = item.is_dir ? 'none' : 'block';
+        menu.style.display = 'block';
+        menu.style.left = event.clientX + 'px';
+        menu.style.top = event.clientY + 'px';
+      }
+
+      function hideContextMenu() {
+        document.getElementById('contextMenu').style.display = 'none';
+      }
+
+      async function handleContextAction(action) {
+        const item = contextTarget;
+        hideContextMenu();
+        if (!item) return;
+        if (action === 'open') return openEntry(item);
+        if (action === 'download') return rawDownloadFile(item.path || '');
+        if (action === 'rename') return renameEntry(item.path || '', item.name || '');
+        if (action === 'move') return moveEntry(item.path || '');
+        if (action === 'delete') return deleteFile(item.path || '');
       }
 
       async function createFolder() {
@@ -354,6 +403,34 @@
         const d = new Date(Number(ts) * 1000);
         return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
       }
+
+      document.addEventListener('click', function () {
+        hideContextMenu();
+      });
+
+      window.addEventListener('scroll', hideContextMenu, true);
+      window.addEventListener('resize', hideContextMenu);
+
+      document.getElementById('contextOpenBtn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        handleContextAction('open');
+      });
+      document.getElementById('contextDownloadBtn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        handleContextAction('download');
+      });
+      document.getElementById('contextRenameBtn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        handleContextAction('rename');
+      });
+      document.getElementById('contextMoveBtn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        handleContextAction('move');
+      });
+      document.getElementById('contextDeleteBtn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        handleContextAction('delete');
+      });
 
       init();
     </script>
