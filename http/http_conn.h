@@ -49,6 +49,7 @@ private:
 
     std::string read_buf_;
     long read_idx_ = 0;
+    std::string response_body_;
 
     char write_buf_[WRITE_BUFFER_SIZE]{};
     long write_idx_ = 0;

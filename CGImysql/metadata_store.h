@@ -14,6 +14,12 @@ struct FileMeta {
     std::int64_t updated_at = 0;
 };
 
+struct FolderMeta {
+    std::string owner;
+    std::string path;
+    std::int64_t updated_at = 0;
+};
+
 // Current hard limits (can be enforced by upper-layer services too):
 // - Single file max size: 20 MB
 // - Per-user total quota: 200 MB
@@ -35,7 +41,12 @@ public:
     bool upsert_file_meta(const FileMeta& meta);
     bool remove_file_meta(const std::string& owner, const std::string& path);
     bool rename_file_meta(const std::string& owner, const std::string& old_path, const std::string& new_path);
+    bool rename_path_prefix(const std::string& owner, const std::string& old_prefix, const std::string& new_prefix);
     std::vector<FileMeta> list_file_meta(const std::string& owner, const std::string& dir, int page, int page_size, int& total);
+    bool upsert_folder_meta(const FolderMeta& meta);
+    bool remove_folder_meta(const std::string& owner, const std::string& path);
+    bool rename_folder_meta(const std::string& owner, const std::string& old_path, const std::string& new_path);
+    std::vector<FolderMeta> list_folder_meta(const std::string& owner);
 
     // Compute current total used bytes for a user from DB.
     std::uint64_t user_used_bytes(const std::string& owner);

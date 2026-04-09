@@ -214,6 +214,7 @@ void HttpConn::init(int sockfd, const sockaddr_in& addr) {
     cli_addr_ = addr;
     read_buf_.clear();
     read_buf_.reserve(READ_BUFFER_SIZE);
+    response_body_.clear();
     read_idx_ = 0;
     write_idx_ = 0;
     iov_cnt_ = 0;
@@ -278,6 +279,7 @@ bool HttpConn::add_response(const char* format, ...) {
 
 void HttpConn::prepare_error(int code, const char* msg) {
     unmap_file();
+    response_body_.clear();
     char body[512];
     snprintf(body, sizeof body, "<html><body><h1>%d</h1><p>%s</p></body></html>", code, msg);
 
@@ -294,16 +296,23 @@ void HttpConn::prepare_error(int code, const char* msg) {
 }
 
 void HttpConn::prepare_json(int code, const char* body) {
+    unmap_file();
+    response_body_.assign(body ? body : "");
     write_idx_ = 0;
     add_response("HTTP/1.1 %d OK\r\n", code);
     add_response("Content-Type: application/json; charset=utf-8\r\n");
-    add_response("Content-Length: %zu\r\n", strlen(body));
+    add_response("Content-Length: %zu\r\n", response_body_.size());
     add_response("Connection: close\r\n\r\n");
-    add_response("%s", body);
 
     iov_[0].iov_base = write_buf_;
     iov_[0].iov_len = static_cast<size_t>(write_idx_);
-    iov_cnt_ = 1;
+    if (!response_body_.empty()) {
+        iov_[1].iov_base = const_cast<char*>(response_body_.data());
+        iov_[1].iov_len = response_body_.size();
+        iov_cnt_ = 2;
+    } else {
+        iov_cnt_ = 1;
+    }
 }
 
 void HttpConn::prepare_binary(int code,
@@ -312,6 +321,8 @@ void HttpConn::prepare_binary(int code,
                               const char* body,
                               size_t body_len,
                               const char* disposition) {
+    unmap_file();
+    response_body_.clear();
     write_idx_ = 0;
     add_response("HTTP/1.1 %d %s\r\n", code, status);
     add_response("Content-Type: %s\r\n", content_type ? content_type : "application/octet-stream");
@@ -338,6 +349,7 @@ void HttpConn::prepare_binary(int code,
 
 bool HttpConn::add_file(const char* path) {
     unmap_file();
+    response_body_.clear();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -377,6 +389,7 @@ bool HttpConn::add_mapped_file_response(const char* path,
                                         const char* content_type,
                                         const char* disposition) {
     unmap_file();
+    response_body_.clear();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -577,6 +590,21 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         return true;
     }
 
+    if (req.path == "/api/files/create-folder" && req.method == "POST") {
+        std::string username;
+        if (!current_user_from_request(req, username)) {
+            prepare_error(401, "Unauthorized");
+            return true;
+        }
+        std::string err;
+        if (!FileService::create_folder(username, JsonUtils::get(json, "path"), err)) {
+            prepare_error(400, err.c_str());
+            return true;
+        }
+        prepare_json(200, "{\"ok\":true}");
+        return true;
+    }
+
     if (req.path == "/api/files/rename" && req.method == "POST") {
         std::string username;
         if (!current_user_from_request(req, username)) {
@@ -584,7 +612,25 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
             return true;
         }
         std::string err;
-        if (!FileService::rename_file(username, JsonUtils::get(json, "old_path"), JsonUtils::get(json, "new_path"), err)) {
+        if (!FileService::rename_path(username, JsonUtils::get(json, "old_path"), JsonUtils::get(json, "new_path"), err)) {
+            prepare_error(400, err.c_str());
+            return true;
+        }
+        prepare_json(200, "{\"ok\":true}");
+        return true;
+    }
+
+    if (req.path == "/api/files/move" && req.method == "POST") {
+        std::string username;
+        if (!current_user_from_request(req, username)) {
+            prepare_error(401, "Unauthorized");
+            return true;
+        }
+        std::string err;
+        if (!FileService::move_path(username,
+                                    JsonUtils::get(json, "path"),
+                                    JsonUtils::get(json, "target_dir"),
+                                    err)) {
             prepare_error(400, err.c_str());
             return true;
         }
@@ -602,6 +648,17 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         const int page = JsonUtils::get_int(json, "page", 1);
         const int page_size = JsonUtils::get_int(json, "page_size", 20);
         const std::string result = FileService::list_files_json(username, rel_dir, page, page_size);
+        prepare_json(200, result.c_str());
+        return true;
+    }
+
+    if (req.path == "/api/files/tree" && req.method == "GET") {
+        std::string username;
+        if (!current_user_from_request(req, username)) {
+            prepare_error(401, "Unauthorized");
+            return true;
+        }
+        const std::string result = FileService::directory_tree_json(username);
         prepare_json(200, result.c_str());
         return true;
     }
