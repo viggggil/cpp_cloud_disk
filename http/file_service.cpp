@@ -407,7 +407,7 @@ std::string FileService::list_files_json(const std::string& user, const std::str
         oss << "{\"path\":\"" << escape_json(m.path)
             << "\",\"name\":\"" << escape_json(path_basename(m.path))
             << "\",\"is_dir\":" << (m.is_dir ? "true" : "false")
-            << "\",\"size\":" << m.size
+            << ",\"size\":" << m.size
             << ",\"updated_at\":" << m.updated_at
             << ",\"content_type\":\"" << escape_json(content_type)
             << "\",\"preview_kind\":\"" << escape_json(preview_kind)
