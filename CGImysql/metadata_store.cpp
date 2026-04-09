@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdio>
 
+#include "../log/log.h"
 #include "sql_connection_pool.h"
 
 MetadataStore& MetadataStore::instance() {
@@ -19,6 +20,7 @@ bool MetadataStore::init_schema() {
     MYSQL* raw = nullptr;
     ConnectionRAII conn(&raw, pool);
     if (!raw) {
+        Log::get_instance()->write_error("db.init_schema failed: mysql connection unavailable");
         return false;
     }
 
@@ -29,6 +31,7 @@ bool MetadataStore::init_schema() {
         "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP" ")";
 
     if (mysql_query(raw, user_sql) != 0) {
+        Log::get_instance()->write_error(std::string("db.init_schema create users failed: ") + mysql_error(raw));
         std::fprintf(stderr, "[db] create users failed: %s\n", mysql_error(raw));
         return false;
     }
@@ -46,10 +49,12 @@ bool MetadataStore::init_schema() {
         "INDEX idx_owner(owner)" ")";
 
     if (mysql_query(raw, file_sql) != 0) {
+        Log::get_instance()->write_error(std::string("db.init_schema create file_meta failed: ") + mysql_error(raw));
         std::fprintf(stderr, "[db] create file_meta failed: %s\n", mysql_error(raw));
         return false;
     }
 
+    Log::get_instance()->write_info("db.init_schema success");
     return true;
 }
 
@@ -66,13 +71,18 @@ bool MetadataStore::register_user(const std::string& username, const std::string
     MYSQL* raw = nullptr;
     ConnectionRAII conn(&raw, pool);
     if (!raw) {
+        Log::get_instance()->write_error("db.register_user failed: mysql connection unavailable username=" + username);
         return false;
     }
 
     const char* sql = "INSERT INTO users(username, password_hash) VALUES(?, ?)";
     MYSQL_STMT* stmt = mysql_stmt_init(raw);
-    if (!stmt) return false;
+    if (!stmt) {
+        Log::get_instance()->write_error("db.register_user failed: stmt_init username=" + username);
+        return false;
+    }
     if (mysql_stmt_prepare(stmt, sql, static_cast<unsigned long>(std::strlen(sql))) != 0) {
+        Log::get_instance()->write_error(std::string("db.register_user prepare failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
@@ -92,11 +102,15 @@ bool MetadataStore::register_user(const std::string& username, const std::string
     bind[1].length = &pwd_len;
 
     if (mysql_stmt_bind_param(stmt, bind) != 0) {
+        Log::get_instance()->write_error(std::string("db.register_user bind failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
 
     bool ok = (mysql_stmt_execute(stmt) == 0);
+    if (!ok) {
+        Log::get_instance()->write_warn(std::string("db.register_user execute failed: ") + mysql_stmt_error(stmt) + " username=" + username);
+    }
     mysql_stmt_close(stmt);
     return ok;
 }
@@ -106,13 +120,18 @@ bool MetadataStore::verify_user(const std::string& username, const std::string& 
     MYSQL* raw = nullptr;
     ConnectionRAII conn(&raw, pool);
     if (!raw) {
+        Log::get_instance()->write_error("db.verify_user failed: mysql connection unavailable username=" + username);
         return false;
     }
 
     const char* sql = "SELECT password_hash FROM users WHERE username = ?";
     MYSQL_STMT* stmt = mysql_stmt_init(raw);
-    if (!stmt) return false;
+    if (!stmt) {
+        Log::get_instance()->write_error("db.verify_user failed: stmt_init username=" + username);
+        return false;
+    }
     if (mysql_stmt_prepare(stmt, sql, static_cast<unsigned long>(std::strlen(sql))) != 0) {
+        Log::get_instance()->write_error(std::string("db.verify_user prepare failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
@@ -125,11 +144,13 @@ bool MetadataStore::verify_user(const std::string& username, const std::string& 
     bind_param[0].length = &username_len;
 
     if (mysql_stmt_bind_param(stmt, bind_param) != 0) {
+        Log::get_instance()->write_error(std::string("db.verify_user bind failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
 
     if (mysql_stmt_execute(stmt) != 0) {
+        Log::get_instance()->write_error(std::string("db.verify_user execute failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
@@ -143,11 +164,13 @@ bool MetadataStore::verify_user(const std::string& username, const std::string& 
     bind_res[0].length = &hash_len;
 
     if (mysql_stmt_bind_result(stmt, bind_res) != 0) {
+        Log::get_instance()->write_error(std::string("db.verify_user bind_result failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
 
     if (mysql_stmt_store_result(stmt) != 0) {
+        Log::get_instance()->write_error(std::string("db.verify_user store_result failed: ") + mysql_stmt_error(stmt) + " username=" + username);
         mysql_stmt_close(stmt);
         return false;
     }
@@ -175,12 +198,14 @@ bool MetadataStore::upsert_file_meta(const FileMeta& meta) {
     MYSQL* raw = nullptr;
     ConnectionRAII conn(&raw, pool);
     if (!raw) {
+        Log::get_instance()->write_error("db.upsert_file_meta failed: mysql connection unavailable owner=" + meta.owner + " path=" + meta.path);
         return false;
     }
 
     // Enforce per-user quota.
     const std::uint64_t used = user_used_bytes(meta.owner);
     if (used + meta.size > kUserQuotaBytes) {
+        Log::get_instance()->write_warn("db.upsert_file_meta reject: quota exceeded owner=" + meta.owner + " path=" + meta.path);
         return false;
     }
 
@@ -195,8 +220,12 @@ bool MetadataStore::upsert_file_meta(const FileMeta& meta) {
         "ON DUPLICATE KEY UPDATE size=VALUES(size), updated_at=VALUES(updated_at)";
 
     MYSQL_STMT* stmt = mysql_stmt_init(raw);
-    if (!stmt) return false;
+    if (!stmt) {
+        Log::get_instance()->write_error("db.upsert_file_meta failed: stmt_init owner=" + copy.owner + " path=" + copy.path);
+        return false;
+    }
     if (mysql_stmt_prepare(stmt, sql, static_cast<unsigned long>(std::strlen(sql))) != 0) {
+        Log::get_instance()->write_error(std::string("db.upsert_file_meta prepare failed: ") + mysql_stmt_error(stmt) + " owner=" + copy.owner + " path=" + copy.path);
         mysql_stmt_close(stmt);
         return false;
     }
@@ -223,11 +252,15 @@ bool MetadataStore::upsert_file_meta(const FileMeta& meta) {
     bind[3].buffer = const_cast<std::int64_t*>(&copy.updated_at);
 
     if (mysql_stmt_bind_param(stmt, bind) != 0) {
+        Log::get_instance()->write_error(std::string("db.upsert_file_meta bind failed: ") + mysql_stmt_error(stmt) + " owner=" + copy.owner + " path=" + copy.path);
         mysql_stmt_close(stmt);
         return false;
     }
 
     bool ok = (mysql_stmt_execute(stmt) == 0);
+    if (!ok) {
+        Log::get_instance()->write_error(std::string("db.upsert_file_meta execute failed: ") + mysql_stmt_error(stmt) + " owner=" + copy.owner + " path=" + copy.path);
+    }
     mysql_stmt_close(stmt);
     return ok;
 }

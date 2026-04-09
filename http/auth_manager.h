@@ -14,6 +14,7 @@ public:
     // Issue a new session id that is valid for ttl_seconds from now.
     std::string issue_session(const std::string& username, int ttl_seconds);
     bool verify_session(const std::string& sid, std::string& username_out);
+    bool revoke_session(const std::string& sid, std::string* username_out = nullptr);
 
 private:
     AuthManager() = default;

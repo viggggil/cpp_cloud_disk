@@ -1,5 +1,6 @@
 #include "webserver.h"
 #include "CGImysql/metadata_store.h"
+#include "log/log.h"
 
 #include <cerrno>
 #include <cstdint>
@@ -58,14 +59,18 @@ void WebServer::log_write() {
     if (close_log_) {
         return;
     }
-    std::printf("[log] init, close_log=%d\n", close_log_);
+    Log::get_instance()->init("./server.log", close_log_);
+    Log::get_instance()->write_info("server.log init success close_log=" + std::to_string(close_log_));
 }
 
 void WebServer::sql_pool() {
     // Initialize MySQL connection pool and DB schema.
     (void)sql_num_;
     if (!MetadataStore::instance().init_schema()) {
+        Log::get_instance()->write_error("server.sql_pool init_schema failed");
         std::fprintf(stderr, "[db] init_schema failed. Check MySQL settings in sql_connection_pool.cpp and ensure database exists.\n");
+    } else {
+        Log::get_instance()->write_info("server.sql_pool init_schema success");
     }
 }
 
@@ -158,6 +163,7 @@ void WebServer::deal_listen() {
             break;
         }
         if (connfd >= MAX_FD) {
+            Log::get_instance()->write_warn("server.accept reject: too many connections connfd=" + std::to_string(connfd));
             close(connfd);
             continue;
         }
@@ -169,6 +175,7 @@ void WebServer::deal_listen() {
         conn_timers_[connfd] = timer_list_.add_timer(60000, [this, connfd]() {
             this->close_conn(connfd, true);
         });
+        Log::get_instance()->write_info("server.accept success: connfd=" + std::to_string(connfd));
     }
 }
 
@@ -181,6 +188,7 @@ void WebServer::close_conn(int sockfd, bool from_timer) {
         conn_timers_[sockfd] = nullptr;
     }
 
+    Log::get_instance()->write_info(std::string("server.close_conn: connfd=") + std::to_string(sockfd) + (from_timer ? " source=timer" : " source=io_or_peer"));
     users_[sockfd].close_conn();
 }
 
@@ -189,6 +197,7 @@ void WebServer::deal_read(int sockfd) {
         return;
     }
     if (!users_[sockfd].read_once()) {
+        Log::get_instance()->write_warn("server.read failed: connfd=" + std::to_string(sockfd));
         close_conn(sockfd, false);
         return;
     }
@@ -201,6 +210,7 @@ void WebServer::deal_read(int sockfd) {
         return;
     }
     if (!pool_->append(&users_[sockfd])) {
+        Log::get_instance()->write_error("server.threadpool append failed: connfd=" + std::to_string(sockfd));
         close_conn(sockfd, false);
         return;
     }
@@ -215,6 +225,7 @@ void WebServer::deal_write(int sockfd) {
         return;
     }
     if (!users_[sockfd].write()) {
+        Log::get_instance()->write_warn("server.write failed: connfd=" + std::to_string(sockfd));
         close_conn(sockfd, false);
         return;
     }

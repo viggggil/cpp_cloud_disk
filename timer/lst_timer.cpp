@@ -1,5 +1,7 @@
 #include "lst_timer.h"
 
+#include "../log/log.h"
+
 using Clock = UtilTimer::Clock;
 using TimePoint = UtilTimer::TimePoint;
 
@@ -126,6 +128,7 @@ void TimerList::tick() {
 
         // 执行回调
         if (cur->cb) {
+            Log::get_instance()->write_info("timer.tick timeout reached: executing connection close callback");
             cur->cb();
         }
 

@@ -1,5 +1,6 @@
 #include "file_service.h"
 #include "../CGImysql/metadata_store.h"
+#include "../log/log.h"
 
 #include <algorithm>
 #include <cctype>
@@ -132,13 +133,16 @@ bool FileService::persist_file(const std::string& user, const std::string& rel_p
     std::string full_path;
     if (!safe_user_path(user, norm_rel, full_path)) {
         err = "invalid path";
+        Log::get_instance()->write_warn("fs.upload reject: invalid path user=" + user + " path=" + norm_rel);
         return false;
     }
     if (!validate_rel_path(norm_rel, err)) {
+        Log::get_instance()->write_warn("fs.upload reject: user=" + user + " path=" + norm_rel + " reason=" + err);
         return false;
     }
     if (size > kMaxFileBytes) {
         err = "file too large (max 20MB)";
+        Log::get_instance()->write_warn("fs.upload reject: file too large user=" + user + " path=" + norm_rel + " size=" + std::to_string(size));
         return false;
     }
 
@@ -155,6 +159,7 @@ bool FileService::persist_file(const std::string& user, const std::string& rel_p
     const std::uint64_t used = MetadataStore::instance().user_used_bytes(user);
     if (used - old_size + size > kUserQuotaBytes) {
         err = "user quota exceeded (200MB)";
+        Log::get_instance()->write_warn("fs.upload reject: quota exceeded user=" + user + " path=" + norm_rel + " used=" + std::to_string(used));
         return false;
     }
 
@@ -162,6 +167,7 @@ bool FileService::persist_file(const std::string& user, const std::string& rel_p
     std::ofstream ofs(full_path, std::ios::binary | std::ios::trunc);
     if (!ofs.is_open()) {
         err = "cannot open file";
+        Log::get_instance()->write_error("fs.upload failed: cannot open file user=" + user + " path=" + full_path);
         return false;
     }
     if (size > 0 && data != nullptr) {
@@ -169,6 +175,7 @@ bool FileService::persist_file(const std::string& user, const std::string& rel_p
     }
     if (!ofs.good()) {
         err = "write failed";
+        Log::get_instance()->write_error("fs.upload failed: write error user=" + user + " path=" + full_path);
         return false;
     }
 
@@ -178,8 +185,10 @@ bool FileService::persist_file(const std::string& user, const std::string& rel_p
     meta.size = size;
     if (!MetadataStore::instance().upsert_file_meta(meta)) {
         err = "metadata persist failed or quota exceeded";
+        Log::get_instance()->write_error("fs.upload failed: metadata persist user=" + user + " path=" + norm_rel);
         return false;
     }
+    Log::get_instance()->write_info("fs.upload success: user=" + user + " path=" + norm_rel + " size=" + std::to_string(size));
     return true;
 }
 
@@ -194,6 +203,7 @@ bool FileService::upload_text_file(const std::string& user, const std::string& r
 bool FileService::download_text_file(const std::string& user, const std::string& rel_path, std::string& content, std::string& err) {
     if (!is_text_extension(rel_path)) {
         err = "preview only supports text files";
+        Log::get_instance()->write_warn("fs.preview reject: unsupported preview type user=" + user + " path=" + rel_path);
         return false;
     }
     std::vector<unsigned char> data;
@@ -202,8 +212,10 @@ bool FileService::download_text_file(const std::string& user, const std::string&
     }
     if (data.size() > kMaxTextPreviewBytes) {
         err = "text preview too large";
+        Log::get_instance()->write_warn("fs.preview reject: preview too large user=" + user + " path=" + rel_path + " size=" + std::to_string(data.size()));
         return false;
     }
+    Log::get_instance()->write_info("fs.preview success: user=" + user + " path=" + rel_path + " size=" + std::to_string(data.size()));
     content.assign(reinterpret_cast<const char*>(data.data()), data.size());
     return true;
 }
@@ -221,19 +233,23 @@ bool FileService::read_file_binary(const std::string& user,
     const std::string norm_rel = trim_slashes(rel_path);
     if (!safe_user_path(user, norm_rel, full_path)) {
         err = "invalid path";
+        Log::get_instance()->write_warn("fs.read reject: invalid path user=" + user + " path=" + norm_rel);
         return false;
     }
     if (!validate_rel_path(norm_rel, err)) {
+        Log::get_instance()->write_warn("fs.read reject: user=" + user + " path=" + norm_rel + " reason=" + err);
         return false;
     }
     std::ifstream ifs(full_path, std::ios::binary);
     if (!ifs.is_open()) {
         err = "file not found";
+        Log::get_instance()->write_warn("fs.read failed: file not found user=" + user + " path=" + full_path);
         return false;
     }
     data.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
     if (!ifs.good() && !ifs.eof()) {
         err = "read failed";
+        Log::get_instance()->write_error("fs.read failed: io error user=" + user + " path=" + full_path);
         return false;
     }
     if (full_path_out) {
@@ -247,17 +263,21 @@ bool FileService::delete_file(const std::string& user, const std::string& rel_pa
     std::string full_path;
     if (!safe_user_path(user, norm_rel, full_path)) {
         err = "invalid path";
+        Log::get_instance()->write_warn("fs.delete reject: invalid path user=" + user + " path=" + norm_rel);
         return false;
     }
     if (!fs::exists(full_path)) {
         err = "file not found";
+        Log::get_instance()->write_warn("fs.delete failed: file not found user=" + user + " path=" + full_path);
         return false;
     }
     if (!fs::remove(full_path)) {
         err = "delete failed";
+        Log::get_instance()->write_error("fs.delete failed: remove returned false user=" + user + " path=" + full_path);
         return false;
     }
     MetadataStore::instance().remove_file_meta(user, norm_rel);
+    Log::get_instance()->write_info("fs.delete success: user=" + user + " path=" + norm_rel);
     return true;
 }
 
@@ -270,21 +290,26 @@ bool FileService::create_folder(const std::string& user, const std::string& rel_
     std::string full_path;
     if (!safe_user_path(user, norm_rel, full_path)) {
         err = "invalid path";
+        Log::get_instance()->write_warn("fs.mkdir reject: invalid path user=" + user + " path=" + norm_rel);
         return false;
     }
     if (!validate_folder_path(norm_rel, err)) {
+        Log::get_instance()->write_warn("fs.mkdir reject: user=" + user + " path=" + norm_rel + " reason=" + err);
         return false;
     }
     std::error_code ec;
     if (fs::exists(full_path)) {
         err = "path already exists";
+        Log::get_instance()->write_warn("fs.mkdir failed: path exists user=" + user + " path=" + norm_rel);
         return false;
     }
     fs::create_directories(full_path, ec);
     if (ec) {
         err = ec.message();
+        Log::get_instance()->write_error("fs.mkdir failed: user=" + user + " path=" + norm_rel + " error=" + err);
         return false;
     }
+    Log::get_instance()->write_info("fs.mkdir success: user=" + user + " path=" + norm_rel);
     return true;
 }
 
@@ -295,6 +320,7 @@ bool FileService::rename_path(const std::string& user, const std::string& old_re
     std::string new_full;
     if (!safe_user_path(user, old_norm, old_full) || !safe_user_path(user, new_norm, new_full)) {
         err = "invalid path";
+        Log::get_instance()->write_warn("fs.rename reject: invalid path user=" + user + " old=" + old_norm + " new=" + new_norm);
         return false;
     }
     const bool is_dir = fs::is_directory(old_full);
@@ -305,10 +331,12 @@ bool FileService::rename_path(const std::string& user, const std::string& old_re
     }
     if (!fs::exists(old_full)) {
         err = "path not found";
+        Log::get_instance()->write_warn("fs.rename failed: source not found user=" + user + " old=" + old_norm);
         return false;
     }
     if (fs::exists(new_full)) {
         err = "target already exists";
+        Log::get_instance()->write_warn("fs.rename failed: target exists user=" + user + " new=" + new_norm);
         return false;
     }
     fs::create_directories(fs::path(new_full).parent_path());
@@ -316,6 +344,7 @@ bool FileService::rename_path(const std::string& user, const std::string& old_re
     fs::rename(old_full, new_full, ec);
     if (ec) {
         err = ec.message();
+        Log::get_instance()->write_error("fs.rename failed: user=" + user + " old=" + old_norm + " new=" + new_norm + " error=" + err);
         return false;
     }
     if (is_dir) {
@@ -332,6 +361,7 @@ bool FileService::rename_path(const std::string& user, const std::string& old_re
     } else {
         MetadataStore::instance().rename_file_meta(user, old_norm, new_norm);
     }
+    Log::get_instance()->write_info("fs.rename success: user=" + user + " old=" + old_norm + " new=" + new_norm);
     return true;
 }
 

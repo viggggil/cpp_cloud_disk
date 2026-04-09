@@ -2,6 +2,7 @@
 #include "auth_manager.h"
 #include "file_service.h"
 #include "json_utils.h"
+#include "../log/log.h"
 
 #include <cerrno>
 #include <cstdarg>
@@ -430,9 +431,11 @@ bool HttpConn::add_mapped_file_response(const char* path,
 }
 
 bool HttpConn::handle_api_request(const HttpRequest& req) {
+    Log::get_instance()->write_info("http.request api: method=" + req.method + " path=" + req.path);
     std::unordered_map<std::string, std::string> json;
     if (req.method == "POST" && req.path.rfind("/api/", 0) == 0 && req.path != "/api/files/upload-local") {
         if (!JsonUtils::parse_flat_object(req.body, json)) {
+            Log::get_instance()->write_warn("http.request invalid json: path=" + req.path);
             prepare_error(400, "Bad Request");
             return true;
         }
@@ -442,9 +445,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         const std::string username = JsonUtils::get(json, "username");
         const std::string password = JsonUtils::get(json, "password");
         if (!AuthManager::instance().register_user(username, password)) {
+            Log::get_instance()->write_warn("http.auth register failed: username=" + username);
             prepare_error(409, "Conflict");
             return true;
         }
+        Log::get_instance()->write_info("http.auth register success: username=" + username);
         prepare_json(200, "{\"ok\":true,\"message\":\"registered\"}");
         return true;
     }
@@ -453,6 +458,7 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         const std::string username = JsonUtils::get(json, "username");
         const std::string password = JsonUtils::get(json, "password");
         if (!AuthManager::instance().verify_user(username, password)) {
+            Log::get_instance()->write_warn("http.auth login failed: username=" + username);
             prepare_error(401, "Unauthorized");
             return true;
         }
@@ -472,6 +478,38 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         iov_[0].iov_base = write_buf_;
         iov_[0].iov_len = static_cast<size_t>(write_idx_);
         iov_cnt_ = 1;
+        Log::get_instance()->write_info("http.auth login success: username=" + username);
+        return true;
+    }
+
+    if (req.path == "/api/auth/logout" && req.method == "POST") {
+        const std::string cookie = HttpParser::get_header(req, "Cookie");
+        const std::string key = "sid=";
+        const size_t pos = cookie.find(key);
+        if (pos == std::string::npos) {
+            Log::get_instance()->write_warn("http.auth logout failed: missing sid cookie");
+            prepare_error(401, "Unauthorized");
+            return true;
+        }
+        const size_t end = cookie.find(';', pos);
+        const std::string sid = cookie.substr(pos + key.size(), end == std::string::npos ? std::string::npos : end - (pos + key.size()));
+        std::string username;
+        if (!AuthManager::instance().revoke_session(sid, &username)) {
+            prepare_error(401, "Unauthorized");
+            return true;
+        }
+        write_idx_ = 0;
+        add_response("HTTP/1.1 200 OK\r\n");
+        add_response("Set-Cookie: sid=deleted; HttpOnly; Max-Age=0; Path=/\r\n");
+        add_response("Content-Type: application/json; charset=utf-8\r\n");
+        const char* body = "{\"ok\":true,\"message\":\"logged out\"}";
+        add_response("Content-Length: %zu\r\n", strlen(body));
+        add_response("Connection: close\r\n\r\n");
+        add_response("%s", body);
+        iov_[0].iov_base = write_buf_;
+        iov_[0].iov_len = static_cast<size_t>(write_idx_);
+        iov_cnt_ = 1;
+        Log::get_instance()->write_info("http.auth logout success: username=" + username);
         return true;
     }
 
@@ -497,9 +535,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         const std::string content = JsonUtils::get(json, "content");
         std::string err;
         if (!FileService::upload_text_file(username, path, content, err)) {
+            Log::get_instance()->write_warn("http.file upload_text failed: user=" + username + " path=" + path + " error=" + err);
             prepare_error(400, err.c_str());
             return true;
         }
+        Log::get_instance()->write_info("http.file upload_text success: user=" + username + " path=" + path);
         prepare_json(200, "{\"ok\":true}");
         return true;
     }
@@ -514,13 +554,16 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         std::vector<unsigned char> data;
         std::string err;
         if (!parse_multipart_file(req, rel_path, data, err)) {
+            Log::get_instance()->write_warn("http.file upload_local parse failed: user=" + username + " error=" + err);
             prepare_error(400, err.c_str());
             return true;
         }
         if (!FileService::upload_binary_file(username, rel_path, data, err)) {
+            Log::get_instance()->write_warn("http.file upload_local failed: user=" + username + " path=" + rel_path + " error=" + err);
             prepare_error(400, err.c_str());
             return true;
         }
+        Log::get_instance()->write_info("http.file upload_local success: user=" + username + " path=" + rel_path + " size=" + std::to_string(data.size()));
         prepare_json(200, "{\"ok\":true}");
         return true;
     }
@@ -535,9 +578,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         std::string content;
         std::string err;
         if (!FileService::download_text_file(username, path, content, err)) {
+            Log::get_instance()->write_warn("http.file preview_text failed: user=" + username + " path=" + path + " error=" + err);
             prepare_error(404, err.c_str());
             return true;
         }
+        Log::get_instance()->write_info("http.file preview_text success: user=" + username + " path=" + path);
         const std::string resp = std::string("{\"ok\":true,\"path\":\"") +
                                  escape_json(path) +
                                  "\",\"content\":\"" +
@@ -562,6 +607,7 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         std::string err;
         std::string full_path;
         if (!FileService::read_file_binary(username, rel_path, data, err, &full_path)) {
+            Log::get_instance()->write_warn("http.file raw_download failed: user=" + username + " path=" + rel_path + " error=" + err);
             prepare_error(404, err.c_str());
             return true;
         }
@@ -569,9 +615,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         const bool preview_mode = query_param_is_true(req.path, "preview");
         char disposition[512];
         if (preview_mode) {
+            Log::get_instance()->write_info("http.file online_preview success: user=" + username + " path=" + rel_path + " content_type=" + content_type);
             return add_mapped_file_response(full_path.c_str(), content_type.c_str(), nullptr);
         }
         std::snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", rel_path.c_str());
+        Log::get_instance()->write_info("http.file download success: user=" + username + " path=" + rel_path + " content_type=" + content_type);
         return add_mapped_file_response(full_path.c_str(), content_type.c_str(), disposition);
     }
 
@@ -583,9 +631,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         }
         std::string err;
         if (!FileService::delete_file(username, JsonUtils::get(json, "path"), err)) {
+            Log::get_instance()->write_warn("http.file delete failed: user=" + username + " path=" + JsonUtils::get(json, "path") + " error=" + err);
             prepare_error(400, err.c_str());
             return true;
         }
+        Log::get_instance()->write_info("http.file delete success: user=" + username + " path=" + JsonUtils::get(json, "path"));
         prepare_json(200, "{\"ok\":true}");
         return true;
     }
@@ -613,9 +663,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
         }
         std::string err;
         if (!FileService::rename_path(username, JsonUtils::get(json, "old_path"), JsonUtils::get(json, "new_path"), err)) {
+            Log::get_instance()->write_warn("http.file rename failed: user=" + username + " old=" + JsonUtils::get(json, "old_path") + " new=" + JsonUtils::get(json, "new_path") + " error=" + err);
             prepare_error(400, err.c_str());
             return true;
         }
+        Log::get_instance()->write_info("http.file rename success: user=" + username + " old=" + JsonUtils::get(json, "old_path") + " new=" + JsonUtils::get(json, "new_path"));
         prepare_json(200, "{\"ok\":true}");
         return true;
     }
@@ -681,6 +733,7 @@ bool HttpConn::current_user_from_request(const HttpRequest& req, std::string& us
 bool HttpConn::parse_request() {
     HttpRequest req;
     if (!HttpParser::parse(read_buf_.data(), read_idx_, req)) {
+        Log::get_instance()->write_warn("http.parse failed: connfd=" + std::to_string(sockfd_));
         prepare_error(400, "Bad Request");
         return true;
     }
@@ -690,15 +743,18 @@ bool HttpConn::parse_request() {
     }
 
     if (req.method != "GET") {
+        Log::get_instance()->write_warn("http.request not implemented: method=" + req.method + " path=" + req.path);
         prepare_error(501, "Not Implemented");
         return true;
     }
 
     if (req.path.empty() || req.path[0] != '/') {
+        Log::get_instance()->write_warn("http.request invalid path: path=" + req.path);
         prepare_error(400, "Bad Request");
         return true;
     }
     if (req.path.find("..") != std::string::npos) {
+        Log::get_instance()->write_warn("http.request forbidden path traversal: path=" + req.path);
         prepare_error(403, "Forbidden");
         return true;
     }
