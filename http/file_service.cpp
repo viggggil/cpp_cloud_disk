@@ -37,6 +37,11 @@ bool is_text_extension(const std::string& path) {
     return ext == "txt" || ext == "md";
 }
 
+bool is_image_extension(const std::string& path) {
+    const std::string ext = lower_ext(path);
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif";
+}
+
 std::string path_basename(const std::string& path) {
     fs::path p(path);
     return p.filename().string();
@@ -256,12 +261,14 @@ std::string FileService::list_files_json(const std::string& user, const std::str
         if (!first) oss << ",";
         first = false;
         const std::string content_type = guess_content_type(m.path);
-        const bool previewable = is_text_extension(m.path);
+        const std::string preview_kind = guess_preview_kind(m.path);
+        const bool previewable = !preview_kind.empty();
         oss << "{\"path\":\"" << escape_json(m.path)
             << "\",\"name\":\"" << escape_json(path_basename(m.path))
             << "\",\"size\":" << m.size
             << ",\"updated_at\":" << m.updated_at
             << ",\"content_type\":\"" << escape_json(content_type)
+            << "\",\"preview_kind\":\"" << escape_json(preview_kind)
             << "\",\"previewable\":" << (previewable ? "true" : "false")
             << "}";
     }
@@ -279,4 +286,10 @@ std::string FileService::guess_content_type(const std::string& rel_path) {
     if (ext == "gif") return "image/gif";
     if (ext == "zip") return "application/zip";
     return "application/octet-stream";
+}
+
+std::string FileService::guess_preview_kind(const std::string& rel_path) {
+    if (is_text_extension(rel_path)) return "text";
+    if (is_image_extension(rel_path)) return "image";
+    return "";
 }

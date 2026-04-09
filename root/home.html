@@ -23,6 +23,10 @@
       .msg.error { color: #c00; }
       .msg.success { color: #090; }
       .muted { color: #666; font-size: 12px; }
+      .preview-panel { margin-top: 16px; }
+      .preview-box { border: 1px solid #eee; background: #fafafa; padding: 12px; border-radius: 6px; }
+      .preview-box pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 13px; }
+      .preview-box img { max-width: 100%; max-height: 480px; display: block; margin: 0 auto; }
     </style>
   </head>
   <body>
@@ -81,6 +85,13 @@
         <tbody></tbody>
       </table>
       <div id="listMsg" class="msg" style="display:none;"></div>
+
+      <div class="preview-panel">
+        <div style="font-size:14px; margin-bottom:8px;">在线预览</div>
+        <div id="previewEmpty" class="muted">选择“查看”可在线预览 txt / md / png / jpg / jpeg / gif。</div>
+        <div id="previewText" class="preview-box" style="display:none;"><pre id="previewTextContent"></pre></div>
+        <div id="previewImage" class="preview-box" style="display:none;"><img id="previewImageContent" alt="图片预览" /></div>
+      </div>
     </div>
 
     <script>
@@ -165,10 +176,12 @@
           }
           (data.items || []).forEach(item => {
             const tr = document.createElement('tr');
+            const escapedPath = (item.path || '').replace(/'/g, "\\'");
+            const escapedPreviewKind = (item.preview_kind || '').replace(/'/g, "\\'");
             const previewBtn = item.previewable
-              ? '<button class="link" onclick="downloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">查看</button> '
+              ? '<button class="link" onclick="previewFile(\'' + escapedPath + '\', \'" + escapedPreviewKind + "\')">查看</button> '
               : '';
-            const downloadBtn = '<button class="link" onclick="rawDownloadFile(\'' + item.path.replace(/'/g, "\\'") + '\')">下载</button> ';
+            const downloadBtn = '<button class="link" onclick="rawDownloadFile(\'' + escapedPath + '\')">下载</button> ';
             tr.innerHTML = '<td>' + (item.name || '') + '</td>' +
                            '<td>' + item.path + '</td>' +
                            '<td>' + item.size + '</td>' +
@@ -176,7 +189,7 @@
                            '<td>' + (item.content_type || '') + '</td>' +
                            '<td>' +
                            previewBtn + downloadBtn +
-                           '<button class="danger" onclick="deleteFile(\'' + item.path.replace(/'/g, "\\'") + '\')">删除</button>' +
+                           '<button class="danger" onclick="deleteFile(\'' + escapedPath + '\')">删除</button>' +
                            '</td>';
             tbody.appendChild(tr);
           });
@@ -228,6 +241,46 @@
         }
       }
 
+      async function previewFile(path, previewKind) {
+        resetPreview();
+        if (previewKind === 'image') {
+          document.getElementById('previewEmpty').style.display = 'none';
+          const img = document.getElementById('previewImageContent');
+          img.src = '/api/files/raw-download?path=' + encodeURIComponent(path) + '&preview=1&_t=' + Date.now();
+          img.onload = function () {
+            document.getElementById('previewImage').style.display = 'block';
+          };
+          img.onerror = function () {
+            resetPreview();
+            alert('图片预览失败');
+          };
+          return;
+        }
+
+        try {
+          const resp = await fetch('/api/files/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+          });
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(text || '读取文件失败');
+          }
+          const data = await resp.json();
+          if (!data.ok) {
+            throw new Error('读取文件失败');
+          }
+          document.getElementById('uploadPath').value = data.path;
+          document.getElementById('uploadContent').value = data.content;
+          document.getElementById('previewEmpty').style.display = 'none';
+          document.getElementById('previewTextContent').textContent = data.content || '';
+          document.getElementById('previewText').style.display = 'block';
+        } catch (e) {
+          alert('文本预览失败: ' + (e && e.message ? e.message : '网络错误'));
+        }
+      }
+
       async function uploadLocalFile() {
         const input = document.getElementById('localFile');
         const customPath = document.getElementById('localFilePath').value.trim();
@@ -275,6 +328,14 @@
 
       function rawDownloadFile(path) {
         window.location.href = '/api/files/raw-download?path=' + encodeURIComponent(path);
+      }
+
+      function resetPreview() {
+        document.getElementById('previewEmpty').style.display = 'block';
+        document.getElementById('previewText').style.display = 'none';
+        document.getElementById('previewImage').style.display = 'none';
+        document.getElementById('previewTextContent').textContent = '';
+        document.getElementById('previewImageContent').src = '';
       }
 
       function formatTimestamp(ts) {

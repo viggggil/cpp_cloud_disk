@@ -79,6 +79,12 @@ bool parse_query_param(const std::string& path, const std::string& key, std::str
     return false;
 }
 
+bool query_param_is_true(const std::string& path, const std::string& key) {
+    std::string value;
+    if (!parse_query_param(path, key, value)) return false;
+    return value == "1" || value == "true" || value == "yes";
+}
+
 bool parse_multipart_file(const HttpRequest& req,
                           std::string& file_path,
                           std::vector<unsigned char>& file_data,
@@ -206,6 +212,8 @@ void HttpConn::unmap_file() {
 void HttpConn::init(int sockfd, const sockaddr_in& addr) {
     sockfd_ = sockfd;
     cli_addr_ = addr;
+    read_buf_.clear();
+    read_buf_.reserve(READ_BUFFER_SIZE);
     read_idx_ = 0;
     write_idx_ = 0;
     iov_cnt_ = 0;
@@ -222,11 +230,9 @@ void HttpConn::close_conn(bool real_close) {
 }
 
 bool HttpConn::read_once() {
-    if (read_idx_ >= READ_BUFFER_SIZE - 1) {
-        return false;
-    }
+    char buf[READ_BUFFER_SIZE];
     while (true) {
-        long bytes_read = recv(sockfd_, read_buf_ + read_idx_, READ_BUFFER_SIZE - read_idx_ - 1, 0);
+        long bytes_read = recv(sockfd_, buf, sizeof(buf), 0);
         if (bytes_read < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
@@ -236,6 +242,10 @@ bool HttpConn::read_once() {
         if (bytes_read == 0) {
             return false;
         }
+        if (read_buf_.size() + static_cast<size_t>(bytes_read) > static_cast<size_t>(MAX_REQUEST_SIZE)) {
+            return false;
+        }
+        read_buf_.append(buf, static_cast<size_t>(bytes_read));
         read_idx_ += bytes_read;
         if (conn_trig_ == 0) {
             break;
@@ -248,7 +258,7 @@ bool HttpConn::has_complete_request() {
     if (read_idx_ < 4) {
         return false;
     }
-    return HttpParser::has_complete_request(read_buf_, read_idx_);
+    return HttpParser::has_complete_request(read_buf_.data(), read_idx_);
 }
 
 bool HttpConn::add_response(const char* format, ...) {
@@ -515,11 +525,12 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
             prepare_error(404, err.c_str());
             return true;
         }
-        const std::string esc_path = escape_json(path);
-        const std::string esc_content = escape_json(content);
-        char resp[WRITE_BUFFER_SIZE];
-        snprintf(resp, sizeof(resp), "{\"ok\":true,\"path\":\"%s\",\"content\":\"%s\"}", esc_path.c_str(), esc_content.c_str());
-        prepare_json(200, resp);
+        const std::string resp = std::string("{\"ok\":true,\"path\":\"") +
+                                 escape_json(path) +
+                                 "\",\"content\":\"" +
+                                 escape_json(content) +
+                                 "\"}";
+        prepare_json(200, resp.c_str());
         return true;
     }
 
@@ -542,7 +553,11 @@ bool HttpConn::handle_api_request(const HttpRequest& req) {
             return true;
         }
         const std::string content_type = FileService::guess_content_type(rel_path);
+        const bool preview_mode = query_param_is_true(req.path, "preview");
         char disposition[512];
+        if (preview_mode) {
+            return add_mapped_file_response(full_path.c_str(), content_type.c_str(), nullptr);
+        }
         std::snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"", rel_path.c_str());
         return add_mapped_file_response(full_path.c_str(), content_type.c_str(), disposition);
     }
@@ -608,7 +623,7 @@ bool HttpConn::current_user_from_request(const HttpRequest& req, std::string& us
 
 bool HttpConn::parse_request() {
     HttpRequest req;
-    if (!HttpParser::parse(read_buf_, read_idx_, req)) {
+    if (!HttpParser::parse(read_buf_.data(), read_idx_, req)) {
         prepare_error(400, "Bad Request");
         return true;
     }

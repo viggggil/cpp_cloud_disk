@@ -11,9 +11,10 @@
 
 class HttpConn {
 public:
-    static const int READ_BUFFER_SIZE = 2048;
+    static const int READ_BUFFER_SIZE = 8192;
     static const int WRITE_BUFFER_SIZE = 8192;
     static const int FILENAME_LEN = 256;
+    static const int MAX_REQUEST_SIZE = 21 * 1024 * 1024; // 20MB 文件 + 一点表单/请求头余量
 
     HttpConn() = default;
     ~HttpConn() = default;
@@ -46,7 +47,7 @@ private:
     int sockfd_ = -1;
     sockaddr_in cli_addr_{};
 
-    char read_buf_[READ_BUFFER_SIZE]{};
+    std::string read_buf_;
     long read_idx_ = 0;
 
     char write_buf_[WRITE_BUFFER_SIZE]{};
