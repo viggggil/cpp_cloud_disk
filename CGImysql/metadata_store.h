@@ -33,9 +33,9 @@ public:
     // Create tables if they do not exist.
     bool init_schema();
 
-    // User management. Password is expected to be a hash at call site.
+    // User management. register_user expects a password hash; verify_user expects plaintext.
     bool register_user(const std::string& username, const std::string& password_hash);
-    bool verify_user(const std::string& username, const std::string& password_hash);
+    bool verify_user(const std::string& username, const std::string& password);
 
     // File metadata operations.
     bool upsert_file_meta(const FileMeta& meta);

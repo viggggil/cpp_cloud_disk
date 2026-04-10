@@ -2,9 +2,58 @@
 #include "../CGImysql/metadata_store.h"
 #include "../log/log.h"
 
+#include <crypt.h>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
+#include <random>
 #include <sstream>
+
+namespace {
+
+constexpr unsigned long kBcryptCost = 12;
+constexpr int kBcryptSaltBytes = 16;
+
+std::string bcrypt_hash_password(const std::string& password) {
+    if (password.empty()) {
+        return std::string();
+    }
+
+    std::random_device rd;
+    char random_bytes[kBcryptSaltBytes];
+    for (int i = 0; i < kBcryptSaltBytes; ++i) {
+        random_bytes[i] = static_cast<char>(rd());
+    }
+
+    char salt[CRYPT_GENSALT_OUTPUT_SIZE] = {0};
+    if (crypt_gensalt_rn("$2b$", kBcryptCost, random_bytes, sizeof(random_bytes), salt, sizeof(salt)) == nullptr) {
+        return std::string();
+    }
+
+    struct crypt_data data;
+    std::memset(&data, 0, sizeof(data));
+    char* hashed = crypt_r(password.c_str(), salt, &data);
+    if (hashed == nullptr || hashed[0] == '*') {
+        return std::string();
+    }
+    return std::string(hashed);
+}
+
+bool bcrypt_verify_password(const std::string& password, const std::string& stored_hash) {
+    if (password.empty() || stored_hash.empty()) {
+        return false;
+    }
+
+    struct crypt_data data;
+    std::memset(&data, 0, sizeof(data));
+    char* computed = crypt_r(password.c_str(), stored_hash.c_str(), &data);
+    if (computed == nullptr || computed[0] == '*') {
+        return false;
+    }
+    return stored_hash == computed;
+}
+
+}  // namespace
 
 AuthManager& AuthManager::instance() {
     static AuthManager manager;
@@ -16,15 +65,20 @@ bool AuthManager::register_user(const std::string& username, const std::string& 
         Log::get_instance()->write_warn("auth.register reject: empty username or password");
         return false;
     }
-    // TODO: replace plain password with salted hash before persistent storage.
-    // For now we store the raw password string as a "hash" for demo purposes.
-    const bool ok = MetadataStore::instance().register_user(username, password);
+
+    const std::string password_hash = bcrypt_hash_password(password);
+    if (password_hash.empty()) {
+        Log::get_instance()->write_error("auth.register failed: username=" + username + " reason=bcrypt_hash_failed");
+        return false;
+    }
+
+    const bool ok = MetadataStore::instance().register_user(username, password_hash);
     if (!ok) {
         Log::get_instance()->write_warn("auth.register failed: username=" + username + " reason=db_insert_failed_or_conflict");
         return false;
     }
     std::lock_guard<std::mutex> lock(mu_);
-    users_[username] = password;
+    users_[username] = password_hash;
     Log::get_instance()->write_info("auth.register success: username=" + username);
     return true;
 }
@@ -36,7 +90,7 @@ bool AuthManager::verify_user(const std::string& username, const std::string& pa
     }
     std::lock_guard<std::mutex> lock(mu_);
     auto it = users_.find(username);
-    const bool ok = it != users_.end() && it->second == password;
+    const bool ok = it != users_.end() && bcrypt_verify_password(password, it->second);
     if (ok) {
         Log::get_instance()->write_warn("auth.login verify success(memory-fallback): username=" + username);
     } else {

@@ -1,6 +1,7 @@
 #ifndef AUTH_MANAGER_H
 #define AUTH_MANAGER_H
 
+#include <cstdint>
 #include <string>
 #include <mutex>
 #include <unordered_map>

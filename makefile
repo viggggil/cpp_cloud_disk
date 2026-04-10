@@ -23,7 +23,7 @@ OBJS := $(SRCS:.cpp=.o)
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ -lmysqlclient
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lmysqlclient -lcrypt
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@

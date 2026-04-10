@@ -1,12 +1,31 @@
 #include "metadata_store.h"
 
 #include <algorithm>
+#include <crypt.h>
 #include <ctime>
 #include <cstring>
 #include <cstdio>
 
 #include "../log/log.h"
 #include "sql_connection_pool.h"
+
+namespace {
+
+bool bcrypt_verify_password(const std::string& password, const std::string& stored_hash) {
+    if (password.empty() || stored_hash.empty()) {
+        return false;
+    }
+
+    struct crypt_data data;
+    std::memset(&data, 0, sizeof(data));
+    char* computed = crypt_r(password.c_str(), stored_hash.c_str(), &data);
+    if (computed == nullptr || computed[0] == '*') {
+        return false;
+    }
+    return stored_hash == computed;
+}
+
+}  // namespace
 
 MetadataStore& MetadataStore::instance() {
     static MetadataStore store;
@@ -115,7 +134,7 @@ bool MetadataStore::register_user(const std::string& username, const std::string
     return ok;
 }
 
-bool MetadataStore::verify_user(const std::string& username, const std::string& password_hash) {
+bool MetadataStore::verify_user(const std::string& username, const std::string& password) {
     ConnectionPool* pool = ConnectionPool::get_instance();
     MYSQL* raw = nullptr;
     ConnectionRAII conn(&raw, pool);
@@ -178,7 +197,7 @@ bool MetadataStore::verify_user(const std::string& username, const std::string& 
     bool ok = false;
     if (mysql_stmt_fetch(stmt) == 0) {
         std::string stored(hash_buf, hash_len);
-        ok = (stored == password_hash);
+        ok = bcrypt_verify_password(password, stored);
     }
 
     mysql_stmt_free_result(stmt);
